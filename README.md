@@ -6,20 +6,7 @@ This Python script is designed to automate and simplify data cleaning, transform
 #### Setting Up the Project
 To set up this Python project from scratch, follow these steps:
 
-1. **Install Python**: 
-Ensure that Python 3.x is installed on your system. You can download it from [python.org](https://www.python.org/downloads/).
-
-2. **Create a Virtual Environment** (optional but recommended):
-   - Navigate to your project directory.
-   - Run `python -m venv venv` to create a virtual environment named `venv`.
-   - Activate the virtual environment:
-     - On Windows, run `.\venv\Scripts\activate`.
-     - On macOS/Linux, run `source venv/bin/activate`.
-
-3. **Install Required Packages**: 
-Install all required packages by running `pip install -r requirements.txt` in your command line.
-
-5. **Prepare Input/Output Folders**: To organize your Python project for data processing with the `master_script.py` and its associated input/output folders, you can structure the project directory as follows:
+1. **Prepare Input/Output Folders**: To organize your Python project for data processing with the `master_script.py` and its associated input/output folders, you can structure the project directory as follows. This structure not only keeps your data organized but also clearly separates test files from live data, reducing the risk of accidental data manipulation.
 
     ```
     project_directory/
@@ -47,21 +34,34 @@ Install all required packages by running `pip install -r requirements.txt` in yo
         └── ...
     ```
 
-    ### How to Use
+2. **Install Python**: Ensure that Python 3.x is installed on your system. You can download it from [python.org](https://www.python.org/downloads/).
 
-    - **Placement of `master_script.py`**: Ensure that `master_script.py` resides in the root of your project directory.
-    - **Preparation of CSV Files**: Place your live CSV files in the `input_csvs` folder and your test CSV files in the `input_csvs_test` folder.
-    - **Running the Script**: Navigate to your project directory in your command line or terminal and run the script using the Python command:
-    ```
-    python master_script.py
-    ```
-    - **Processing Files**: Follow the interactive menu in the command line to select the desired operation. The script will process files from the input folders and save the results in the corresponding output folders.
-    - **Reviewing Results**: After processing, check the `output_csvs` or `output_csvs_test` folders for the processed files.
+3. **Setting up a Virtual Environment** (optional but recommended):
+   To set up and use a virtual environment for your project, you can follow these steps:
 
-    This structure not only keeps your data organized but also clearly separates test files from live data, reducing the risk of accidental data manipulation.
+4. **Create a Virtual Environment**:
+   - Navigate to your project directory in the terminal.
+   - Run `python3 -m venv venv` to create a virtual environment named `venv`. You can replace the second `venv` with another name for your environment if you wish.
 
+5. **Activate the Virtual Environment**:
+   - For Windows, activate it with `.\venv\Scripts\activate`.
+   - For macOS and Linux, use `source venv/bin/activate`.
+
+6. **Install Dependencies**:
+   - Ensure you have the `requirements.txt` file in your project directory.
+   - Install the required packages by running `pip install -r requirements.txt`.
+
+7. **Running Your Script**:
+   - With the virtual environment activated and dependencies installed, you can now run your script using Python as usual, e.g., `python master_script.py`.
+
+8. **Deactivating the Virtual Environment**:
+   - When you're done, you can deactivate the virtual environment by simply running `deactivate`.
+
+#### Main Menu Functions
+The script offers a variety of functions accessible through the main menu:
 
 ### Detailed Analysis of Menu Functions
+
 This documentation provides a closer look at each menu function within the Python script designed for data processing. It aims to guide users through various operations, offering insights into their utility and application through examples.
 
 #### 1. Check Individual and Combo Duplicates
@@ -87,7 +87,7 @@ This documentation provides a closer look at each menu function within the Pytho
 #### 5. Split and Order CSVs
    - **Purpose**: Splits large CSV files into smaller chunks and/or orders records based on specified criteria.
    - **Example Use**: Split a large dataset into smaller files with 1000 records each, or sort records by a `date` column.
-  - **How to Use**: Indicate the splitting criteria or the column by which to order the data when prompted.
+   - **How to Use**: Indicate the splitting criteria or the column by which to order the data when prompted.
 
 #### 6. Process Mandatory Fields
    - **Purpose**: Identifies rows missing values in specified mandatory fields and segregates them.
@@ -125,7 +125,9 @@ This documentation provides a closer look at each menu function within the Pytho
    - **`preprocess_float`**: A converter function used to preprocess float values by removing spaces before conversion, aiding in data type consistency
 
 #### Usage Examples
-After setting up the input/output folders, navigate to the script's directory in your command line and run the script. Use the menu to select an operation and follow the prompts to specify input/output folders, data types for columns (if necessary), and other operation-specific options. For detailed usage examples for each function, refer to the inline comments and prompts within the script.
+After setting up the input/output folders, navigate to the script's directory in your command line and run the script. Use the menu to select an operation and follow the prompts to specify input/output folders, data types for columns (if necessary), and other operation-specific options.
+
+For detailed usage examples for each function, refer to the inline comments and prompts within the script.
 
 #### Conclusion
 This script is designed to be a comprehensive tool for data processing, offering flexibility for both development/testing and production use. By automating routine data cleaning and transformation tasks, it aims to save time and reduce the potential for manual errors, making it a valuable addition to any data analyst's toolkit.
