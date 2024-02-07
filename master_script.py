@@ -1,7 +1,3 @@
-# TO ADD
-# for mandatory field check, create additional csv for rows with multiple missing values.
-
-
 import os
 import re
 import unicodedata
