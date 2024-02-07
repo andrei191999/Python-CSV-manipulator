@@ -42,25 +42,19 @@ To set up this Python project from scratch, follow these steps:
 4. **Create a Virtual Environment**:
    - Navigate to your project directory in the terminal.
    - Run `python3 -m venv venv` to create a virtual environment named `venv`. You can replace the second `venv` with another name for your environment if you wish.
-
-5. **Activate the Virtual Environment**:
    - For Windows, activate it with `.\venv\Scripts\activate`.
    - For macOS and Linux, use `source venv/bin/activate`.
+   - When you're done, you can deactivate the virtual environment by simply running `deactivate`.
 
-6. **Install Dependencies**:
+5. **Install Dependencies**:
    - Ensure you have the `requirements.txt` file in your project directory.
    - Install the required packages by running `pip install -r requirements.txt`.
 
-7. **Running Your Script**:
+6. **Running Your Script**:
    - With the virtual environment activated and dependencies installed, you can now run your script using Python as usual, e.g., `python master_script.py`.
 
-8. **Deactivating the Virtual Environment**:
-   - When you're done, you can deactivate the virtual environment by simply running `deactivate`.
 
 #### Main Menu Functions
-The script offers a variety of functions accessible through the main menu:
-
-### Detailed Analysis of Menu Functions
 
 This documentation provides a closer look at each menu function within the Python script designed for data processing. It aims to guide users through various operations, offering insights into their utility and application through examples.
 
