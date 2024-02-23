@@ -296,49 +296,46 @@ def count_value_occurrences(input_folder, output_folder, data_types):
 
     # Counters for each column
     occurrence_counters = {col: 0 for col in column_names}
+    rows_with_searched_values = {col: pd.DataFrame() for col in column_names}
 
     for filename in os.listdir(input_folder):
         if filename.endswith(".csv"):
             file_path = os.path.join(input_folder, filename)
-
             try:
                 df = read_csv_with_dtypes(file_path, data_types)
-
                 for col in column_names:
                     if col in df.columns:
-                        if is_substring:
-                            mask = df[col].apply(lambda x: value_to_search in str(x))
-                        else:
-                            mask = df[col] == value_to_search
-
+                        mask = (
+                            df[col].apply(lambda x: value_to_search in str(x))
+                            if is_substring
+                            else df[col] == value_to_search
+                        )
                         rows_with_searched_value = df[mask]
-
-                        # Update the counter
                         occurrence_counters[col] += rows_with_searched_value.shape[0]
-
-                        if not rows_with_searched_value.empty:
-                            sanitized_filename = sanitize_filename(
-                                sender_name
-                                + "_rows_with_"
-                                + col
-                                + "_"
-                                + value_to_search
-                                + "_"
-                                + timestamp
-                                + ".csv"
-                            )
-                            output_file_path = os.path.join(
-                                output_folder, f"{sanitized_filename}"
-                            )
-                            rows_with_searched_value.to_csv(
-                                output_file_path, index=False
-                            )
-                            print(
-                                f"Rows with '{value_to_search}' in column '{col}' saved to {output_file_path}"
-                            )
-
+                        rows_with_searched_values[col] = pd.concat(
+                            [rows_with_searched_values[col], rows_with_searched_value],
+                            ignore_index=True,
+                        )
             except Exception as e:
                 print(f"Error processing file {filename}: {e}")
+
+    for col, rows in rows_with_searched_values.items():
+        if not rows.empty:
+            sanitized_filename = sanitize_filename(
+                sender_name
+                + "_rows_with_"
+                + col
+                + "_"
+                + value_to_search
+                + "_"
+                + timestamp
+                + ".csv"
+            )
+            output_file_path = os.path.join(output_folder, sanitized_filename)
+            rows.to_csv(output_file_path, index=False)
+            print(
+                f"Rows with '{value_to_search}' in column '{col}' saved to {output_file_path}"
+            )
 
     # Print occurrence counts
     for col, count in occurrence_counters.items():
@@ -1116,12 +1113,6 @@ def sanitize_filename(name):
     return name
 
 
-def add_quotes_to_column(df, column_name):
-    if column_name in df.columns:
-        df.loc[:, column_name] = '"' + df[column_name].astype(str) + '"'
-    return df
-
-
 def read_csv_with_dtypes(file_path, data_types):
     try:
         converters = {
@@ -1240,6 +1231,12 @@ def preprocess_float(value):
         return float(str(value).replace(" ", ""))
     except ValueError:
         return None  # or return pd.NA if you want to use pandas' NA type
+
+
+def add_quotes_to_column(df, column_name):
+    if column_name in df.columns:
+        df.loc[:, column_name] = '"' + df[column_name].astype(str) + '"'
+    return df
 
 
 if __name__ == "__main__":

@@ -1,3 +1,13 @@
+# other files and folders
+fix_doc_nr.py
+extract_rows.py
+extract_company_code.py
+input_csvs_proc/
+input_csvs_test/
+output_csvs_test/
+input_csvs/
+output_csvs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
