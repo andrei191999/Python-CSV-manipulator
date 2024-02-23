@@ -1233,11 +1233,5 @@ def preprocess_float(value):
         return None  # or return pd.NA if you want to use pandas' NA type
 
 
-def add_quotes_to_column(df, column_name):
-    if column_name in df.columns:
-        df.loc[:, column_name] = '"' + df[column_name].astype(str) + '"'
-    return df
-
-
 if __name__ == "__main__":
     main()
