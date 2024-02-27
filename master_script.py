@@ -5,10 +5,15 @@ import pandas as pd
 from tqdm.auto import tqdm
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 
-# Global variable for sender name
-sender_name = ""
+# Global variables
+global input_date_format, output_date_format, sender_name, timestamp, numeric_format, incorrect_rows_accumulator
+sender_name = numeric_format = ""
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+input_date_format = output_date_format = None
+incorrect_rows_accumulator = []
 
 
 def main():
@@ -37,7 +42,7 @@ def main():
         return
 
     # Inform the user about data type options and get user-defined types
-    data_types = get_data_types(input_folder)
+    data_types = get_data_types_and_clean(input_folder)
 
     # Ensure output folder exists
     if not os.path.exists(output_folder):
@@ -682,8 +687,6 @@ def parse_operation(operation, df):
 
 # Type Conversion: Automatically convert non-string data to strings before concatenation, or handle different data types explicitly.
 # Robust Error Handling: Add more checks and error messages to handle cases like invalid indices, non-existent columns, or unsupported operations.
-
-
 def add_or_update_column(input_folder, output_folder, data_types):
     column_prompt = "Enter the column number to update, '-1' to add a new column, or column name directly: "
     column_name, _ = get_column_names(
@@ -1053,11 +1056,10 @@ def get_column_names(
         return column_names if valid_input else None, existing_columns
 
 
-""" Sanitize a string to be used as a valid filename. Removes or replaces characters that are not
-allowed in filenames, trims whitespace, and avoids names that could be problematic for a file system. """
-
-
 def sanitize_filename(name):
+    """Sanitize a string to be used as a valid filename. Removes or replaces characters that are not
+    allowed in filenames, trims whitespace, and avoids names that could be problematic for a file system.
+    """
     # Remove leading and trailing whitespace
     name = name.strip()
 
@@ -1113,124 +1115,421 @@ def sanitize_filename(name):
     return name
 
 
-def read_csv_with_dtypes(file_path, data_types):
+def read_csv_with_dtypes(file_path, confirmed_data_types):
+    # Read a CSV file with specified data types and preprocess numeric values.
     try:
         converters = {
-            col: preprocess_float
-            for col, dtype in data_types.items()
-            if dtype == "float64" or dtype == "int64"
+            col: preprocess_numeric_series
+            for col, dtype in confirmed_data_types.items()
+            if dtype == "float"  # Adjusting based on simplified data types
         }
         data_types = {
-            col: dtype
-            for col, dtype in data_types.items()
-            if dtype != "float64" and dtype != "int64"
+            col: (
+                dtype if dtype not in ["float", "integer"] else None
+            )  # Let pandas infer int/float
+            for col, dtype in confirmed_data_types.items()
         }
         df = pd.read_csv(file_path, dtype=data_types, converters=converters)
-        # Print final data types
-        # print("Final Data Types after processing:")
-        # print(df.dtypes)
+        # Optionally print final data types for verification
         return df
     except Exception as e:
         print(f"Error reading file {file_path}: {e}")
         return pd.DataFrame()
 
 
-def get_data_types(input_folder):
-    # Function to map dtype to short code
-    def dtype_to_code(dtype):
-        mapping = {
-            "object": "s",
-            "int64": "i",
-            "float64": "f",
-            "bool": "b",
-            # Add other mappings if needed
-        }
-        return mapping.get(str(dtype), "s")
+def sanitize_data(df, data_types, file_path):
+    """Extract rows that don't match the specified dtypes for the current file."""
+    global incorrect_rows_accumulator
+    incorrect_mask = pd.Series(False, index=df.index)
 
-    # Attempt to load the first CSV file in the directory and display inferred data types
-    for filename in os.listdir(input_folder):
-        if filename.endswith(".csv"):
-            file_path = os.path.join(input_folder, filename)
-            try:
-                df = pd.read_csv(file_path, nrows=5)  # Read first few rows
-                # Adjust data types for columns with all empty values
-                for col in df.columns:
-                    if df[col].isnull().all():
-                        df[col] = df[col].astype(str)
-                print("\nPython's inferred data types for the first CSV file:")
-                for col in df.columns:
-                    print(f"  {col}: {dtype_to_code(df[col].dtype)}")
-                break
-            except Exception as e:
-                print(f"Error reading file {filename}: {e}")
-                return {}
+    for col, dtype in data_types.items():
+        if dtype == "date":
+            processed_col = preprocess_date(df[col])
+            incorrect_mask |= processed_col.isna() & df[col].notna()
+        elif dtype in ["float", "integer"]:
+            processed_col = preprocess_numeric_series(
+                df[col]
+            )  # Use updated numeric preprocessing
+            incorrect_mask |= processed_col.isna() & df[col].notna()
+        elif dtype == "boolean":
+            processed_col = (
+                df[col].astype(str).str.lower().isin(["true", "false", "1", "0"])
+            )
+            incorrect_mask |= ~processed_col & df[col].notna()
+        elif dtype == "string":
+            # For strings, we can check for non-string data if there are specific patterns to look for.
+            # An example could be checking for unexpected numeric data in a string column:
+            # processed_col = df[col].astype(str).str.match(r'^\D+$')  # Regex for non-digits
+            # incorrect_mask |= ~processed_col & df[col].notna()
+            pass  # If there's no specific check needed for strings, just pass.
 
-    # Warnings about data type implications
-    print("\nWarning about Data Type Choices:")
-    print("  - Choosing 'bool' will camel case 'True'/'False' values.")
-    print("  - Choosing 'float' will remove spaces and add decimals, even for .0.")
-    print(
-        "  - It's usually best to use 'string' unless you specifically need number or boolean formatting."
-    )
+    # Select rows where any data type conversion was incorrect.
+    incorrect_rows = df[incorrect_mask]
 
-    # Ask user whether to set all columns to strings
-    choice = (
-        input(
-            "\nSet all columns to strings instead of inferred types? (yes [Y]/no [N]): "
-        )
-        .strip()
-        .lower()
-    )
-    default_to_str = choice == "y"
+    # Append incorrect rows to the accumulator, but do not drop duplicates.
+    incorrect_rows_accumulator.append(incorrect_rows)
 
-    # Reload DataFrame with chosen data types
-    df = pd.read_csv(file_path, nrows=5, dtype=str if default_to_str else None)
+    # Drop incorrect rows from the DataFrame to create the cleaned data.
+    # We're excluding nulls from the removal condition, so null values will remain.
+    df_clean = df.drop(index=incorrect_rows.index)
+    return df_clean
 
-    # Ask if the user wants to manually edit data types
-    edit_choice = (
-        input(
-            "Do you want to manually edit any of the column data types? (yes [Y]/no [N]): "
-        )
-        .strip()
-        .lower()
-    )
-    if edit_choice != "y":
-        return {col: "str" if default_to_str else df[col].dtype for col in df.columns}
 
-    # Prompt user for data types
-    print("\nSpecify data types for each column (current type shown in brackets):")
-    print("  s: string, i: integer, f: float, b: boolean")
-    print("Hit enter to confirm or enter a new type.")
+def confirm_or_edit_data_types(file_data_types):
+    """Allow the user to confirm or edit the inferred data types with explanations and a help option."""
 
-    data_type_options = {
-        "s": "str",
-        "i": "int64",
-        "f": "float64",
-        "b": "bool",
-        # Add other options if needed
+    dtype_map = {
+        "d": "date",
+        "f": "float",
+        "i": "integer",
+        "b": "boolean",
+        "s": "string",
     }
+    print("\nYou can now confirm or edit the inferred data types for each column.")
+    print(
+        "\nEnter 'd' for date, 'f' for float, 'i' for integer, 'b' for boolean, 's' for string, or leave empty to default to string."
+    )
+    print(
+        "\nType 'help' at any prompt for more information on data types and implications of changing them."
+    )
 
-    data_types = {}
+    confirmed_data_types = {}
+    print("\nInferred data types:")
+    for col, dtype in file_data_types.items():
+        response = input(
+            f"Column '{col}' is inferred as '{dtype}'. Edit or press Enter to accept (help for info): "
+        )
+        if response.strip().lower() == "help":
+            print(
+                "\nHelp: Choosing the correct data type is crucial for accurate data analysis."
+            )
+            print(
+                "d: date, f: float, i: integer, b: boolean, s: string. Changing types might lead to data loss or errors."
+            )
+            response = input(f"Edit data type for '{col}' [{dtype}]: ")
+
+        if response in dtype_map:
+            confirmed_data_types[col] = dtype_map[response]
+            print(f"Column '{col}' data type changed to {dtype_map[response]}.")
+        elif response == "":
+            confirmed_data_types[col] = "string"
+            print(f"Column '{col}' data type defaulted to string.")
+        else:
+            confirmed_data_types[col] = (
+                dtype  # Keep the inferred data type if no valid input
+            )
+            print(f"No change for column '{col}', kept as {dtype}.")
+
+        confirmed_data_types[col] = (
+            response if response else dtype
+        )  # Default to inferred dtype if no input
+    return confirmed_data_types
+
+
+def infer_data_types_from_values(column, col_name):
+    """Infer the predominant data type for a column using batch operations."""
+    global input_date_format
+
+    type_counts = {
+        "date": 0,
+        "integer": 0,
+        "float": 0,
+        "boolean": 0,
+        "string": 0,
+    }  # Starting with string as default
+
+    # Attempt date conversion
+    if input_date_format:
+        try:
+            column_datetime = pd.to_datetime(
+                column.dropna().unique(), format=input_date_format, errors="coerce"
+            )
+            date_notna_ratio = column_datetime.notna().sum() / max(
+                len(column.dropna().unique()), 1
+            )
+            type_counts["date"] = date_notna_ratio
+        except Exception as e:
+            print(f"Date conversion error for {col_name}: {e}")
+
+    # Boolean detection
+    column_boolean = column.dropna().apply(
+        lambda x: str(x).lower() in ["true", "false", "1", "0", "t", "f"]
+    )
+    boolean_ratio = column_boolean.mean()
+    type_counts["boolean"] = boolean_ratio if not pd.isna(boolean_ratio) else 0
+
+    # Exclude identified booleans for numeric analysis
+    column_non_boolean = column.dropna()[~column_boolean]
+
+    if not column_non_boolean.empty:
+        column_numeric = pd.to_numeric(column_non_boolean, errors="coerce")
+        notna_ratio = column_numeric.notna().mean()
+        type_counts["float"] = notna_ratio * (column_numeric % 1 != 0).mean()
+        type_counts["integer"] = notna_ratio * (column_numeric % 1 == 0).mean()
+    else:
+        # If no data left for numeric analysis, adjust probabilities accordingly
+        type_counts["float"] = 0
+        type_counts["integer"] = 0
+
+    # Adjust string probability to account for the absence/presence of other types
+    type_counts["string"] = 1 - sum(type_counts.values())
+
+    # Determine the predominant type based on the highest probability
+    predominant_type = max(type_counts, key=type_counts.get)
+
+    return predominant_type, type_counts
+
+
+def process_file(file_path):
+    """Process a single CSV file to infer column data types with probabilities."""
+    data_types = data_type_probabilities = {}
+
+    df = pd.read_csv(file_path)  # Adjust nrows as needed to ensure enough data
+
     for col in df.columns:
-        current_type = dtype_to_code(df[col].dtype)
-        user_input = (
-            input(f"{col} [{current_type if not default_to_str else 's'}]: ")
+        # Ensure we're working with a pandas Series
+        column_data = df[col].dropna().unique()  # This should remain as a pandas Series
+        # If column_data is somehow a numpy array, convert it back to a pandas Series
+        if not isinstance(column_data, pd.Series):
+            column_data = pd.Series(column_data)
+
+        predominant_dtype, predominant_dtype_probability = infer_data_types_from_values(
+            column_data, col
+        )
+        data_types[col] = predominant_dtype
+        data_type_probabilities[col] = predominant_dtype_probability
+
+    return data_types, data_type_probabilities
+
+
+def accumulate_data_type_probabilities(files):
+    # Initialize a nested defaultdict for accumulating probabilities
+    # The structure is: column name -> data type -> accumulated probability
+    accumulated_probabilities = defaultdict(lambda: defaultdict(float))
+
+    # Example loop to simulate accumulating probabilities from multiple files
+    # Replace this with your actual logic for processing files and getting probabilities
+    for file_path in files:
+        # Simulate getting inferred probabilities for each column in a file
+        # This should be replaced with the actual call to process_file or similar
+        _, inferred_probabilities = process_file(file_path)  # Placeholder function call
+
+        # Accumulate probabilities
+        for col, dtype_probs in inferred_probabilities.items():
+            for dtype, prob in dtype_probs.items():
+                # Here, we correctly add the probability to the existing value
+                accumulated_probabilities[col][dtype] += prob
+
+    print(accumulated_probabilities)
+    return accumulated_probabilities
+
+
+def get_data_types_and_clean(input_folder):
+    """Orchestrates the entire process including user interaction for data type decisions and data sanitization."""
+    # Set global formats based on user input
+    get_user_numeric_format_choice()
+    get_user_date_format_choices()
+    incorrect_rows_accumulator = []  # List to accumulate incorrect rows DataFrames
+    # Initialize the structure to accumulate probabilities across all files
+    predominant_data_types = {}
+
+    files = [
+        os.path.join(input_folder, f)
+        for f in os.listdir(input_folder)
+        if f.endswith(".csv")
+    ]
+    accumulated_probabilities = accumulate_data_type_probabilities(files)
+
+    # Normalize accumulated probabilities and decide predominant data type for each column
+    for col, dtype_probs in accumulated_probabilities.items():
+        total = sum(dtype_probs.values())
+        normalized_probs = {dtype: prob / total for dtype, prob in dtype_probs.items()}
+        predominant_dtype = max(normalized_probs, key=normalized_probs.get)
+        predominant_data_types[col] = predominant_dtype
+
+    # Display the aggregated results to the user for confirmation
+    print("\nAggregated Data Types Inference:")
+    for col, dtype in predominant_data_types.items():
+        print(f"Column: {col}, Predominant Data Type: {dtype}")
+
+    edit_choice = (
+        input("Do you want to edit any of these data types? (Y/N): ").strip().lower()
+    )
+    if edit_choice == "y":
+        confirmed_data_types = confirm_or_edit_data_types(predominant_data_types)
+    else:
+        confirmed_data_types = predominant_data_types
+
+    # Ask if the user wants to sanitize and clean the data
+    print(
+        "\nSanitizing data removes rows that do not match the specified data types, potentially altering your dataset."
+    )
+    print(
+        "This step can improve data quality but may result in data loss. Type 'help' for more information."
+    )
+
+    sanitize_choice = (
+        input("Do you want to sanitize and clean the input data? (Y/N/Help): ")
+        .strip()
+        .lower()
+    )
+    if sanitize_choice == "help":
+        print(
+            "\nHelp: Sanitization checks each row against the chosen data types. Rows with mismatches are set aside."
+        )
+        print(
+            "This ensures consistency but consider backing up your data first. Proceed with caution."
+        )
+        sanitize_choice = (
+            input("Do you want to sanitize and clean the input data? (Y/N): ")
             .strip()
             .lower()
         )
-        data_types[col] = data_type_options.get(
-            user_input, "str" if default_to_str else df[col].dtype
+
+    if sanitize_choice == "y":
+        for file_path in files:
+            print(f"\nProcessing {file_path} for sanitization...")
+            df = read_csv_with_dtypes(file_path, confirmed_data_types)
+            df_clean = sanitize_data(df, confirmed_data_types, file_path)
+            # Save the cleaned DataFrame to a new CSV file
+            cleaned_file_path = file_path.replace(".csv", "_clean.csv")
+            df_clean.to_csv(cleaned_file_path, index=False)
+            print(f"Cleaned data saved to {cleaned_file_path}")
+
+    # If the user chooses not to sanitize data
+    elif sanitize_choice == "n":
+        print(
+            "\nYou've chosen not to sanitize your data. Please be aware this might lead to issues downstream,"
+        )
+        print(
+            "especially if data types do not match your expectations. Ensure you have validated your data types accurately."
+        )
+        # Proceed with reading input CSVs with the chosen dtypes
+
+    # After processing all files, consolidate and save incorrect rows to a single CSV if sanitization was chosen
+    if incorrect_rows_accumulator:
+        all_incorrect_rows = pd.concat(incorrect_rows_accumulator, ignore_index=True)
+        all_incorrect_rows.to_csv(
+            os.path.join(input_folder, "all_incorrect_rows.csv"), index=False
+        )
+        print(
+            f"All incorrect rows saved to {os.path.join(input_folder, 'all_incorrect_rows.csv')}"
         )
 
-    return data_types
+
+# add check for custom number format
+def get_user_numeric_format_choice():
+    global numeric_format  # Declare the use of the global variable within the function
+
+    print("\nSelect the numeric format for your CSV:")
+    print("1: Dot as decimal separator (e.g., 1,000.00)")
+    print("2: Comma as decimal separator (e.g., 1.000,00)")
+    print("c: Custom format")
+    choice = input("Your choice (1/2/c): ").strip()
+
+    if choice == "2":
+        numeric_format = {"decimal": ",", "thousands": "."}
+    elif choice == "c":
+        decimal = input("Enter your decimal separator (e.g., '.', ','): ").strip()
+        thousands = input(
+            "Enter your thousands separator (if any, else leave blank): "
+        ).strip()
+        numeric_format = {"decimal": decimal, "thousands": thousands}
+    else:
+        print("Defaulting to dot as decimal separator.")
+        # The numeric_format is already initialized with the default values, so no need to update it unless the user chooses a different format.
 
 
-def preprocess_float(value):
-    """Remove spaces and convert to float."""
-    try:
-        return float(str(value).replace(" ", ""))
-    except ValueError:
-        return None  # or return pd.NA if you want to use pandas' NA type
+# add check for custom date format
+def get_user_date_format_choices():
+    """Prompts the user for input and output date formats with explanations and a help option."""
+    global input_date_format, output_date_format
+    print(
+        "\nYour CSV files might contain dates. Specifying the correct date format ensures accurate processing."
+    )
+    print("If you're unsure about the date formats, type 'help' for examples.")
+
+    has_dates = input("Do CSV files contain date values? (Y/N/Help): ").strip().lower()
+    if has_dates == "help":
+        # Provide examples and implications of date format selection
+        print(
+            "\nHelp: Choosing 'Y' allows you to specify the date format present in your CSV files."
+        )
+        has_dates = input("Do CSV files contain date values? (Y/N): ").strip().lower()
+
+    if has_dates == "y":
+        date_formats = {
+            "1": "%d/%m/%Y",
+            "2": "%m/%d/%Y",
+            "3": "%Y-%m-%d",
+            "4": "%d-%m-%Y",
+            "5": "%Y/%m/%d",
+        }
+        print("\nSelect the input date format for your CSV:")
+        for key, fmt in date_formats.items():
+            print(f"{key}: {fmt}")
+        print("c: Custom format")
+        choice = input("Your choice: ").strip().lower()
+        input_date_format = (
+            date_formats.get(choice)
+            if choice in date_formats
+            else (
+                input("Enter your custom input date format: ").strip()
+                if choice == "c"
+                else None
+            )
+        )
+
+        print("\nSelect the output date format for your CSV (if different from input):")
+        for key, fmt in date_formats.items():
+            print(f"{key}: {fmt}")
+        print("c: Custom format, s: Same as input")
+        choice = input("Your choice: ").strip().lower()
+        output_date_format = (
+            input_date_format
+            if choice == "s"
+            else (
+                date_formats.get(choice)
+                if choice in date_formats
+                else (
+                    input("Enter your custom output date format: ").strip()
+                    if choice == "c"
+                    else None
+                )
+            )
+        )
+    else:
+        input_date_format = output_date_format = None
+
+
+def preprocess_numeric_series(column):
+    """
+    Preprocess a numeric series based on the user-selected numeric format.
+    Removes thousands separators and handles decimal separators accordingly.
+    """
+    # Assuming global numeric_format has keys "decimal" and "thousands"
+    global numeric_format
+
+    if numeric_format["thousands"]:  # Remove thousands separator if specified
+        column = column.str.replace(numeric_format["thousands"], "", regex=False)
+
+    if (
+        numeric_format["decimal"] and numeric_format["decimal"] != "."
+    ):  # Adjust decimal separator
+        column = column.str.replace(numeric_format["decimal"], ".", regex=False)
+
+    return pd.to_numeric(column, errors="coerce")
+
+
+def preprocess_date(column):
+    global input_date_format
+    """Convert date strings from a pandas Series to the specified global input and output formats."""
+    if not input_date_format:
+        return column
+    date_converted = pd.to_datetime(column, format=input_date_format, errors="coerce")
+    if output_date_format:
+        return date_converted.dt.strftime(output_date_format)
+    return date_converted
 
 
 if __name__ == "__main__":
