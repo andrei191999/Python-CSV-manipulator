@@ -2,17 +2,27 @@ import os
 import re
 import unicodedata
 import pandas as pd
+import numpy as np
 from tqdm.auto import tqdm
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
+from multiprocessing import Manager
+from tabulate import tabulate
+from functools import partial
 
-# Global variable for sender name
-sender_name = ""
+# Global variables
+global input_folder, output_folder, in_date_format, boolean_format, out_date_format, sender_name, timestamp, numeric_format, incorrect_rows_accumulator, confirmed_data_types
+in_date_format = out_date_format = numeric_format = boolean_format = ""
+input_folder = output_folder = sender_name = ""
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+incorrect_rows_accumulator = []
+confirmed_data_types = {}
 
 
 def main():
-    global sender_name, timestamp
+    global sender_name, timestamp, input_folder, output_folder
     print("Welcome to the CSV Utility Tool")
     print("Make sure to place this script in a new folder.")
     print("Create two folders in this directory: 'input_csvs_test' and 'input_csvs'.")
@@ -37,7 +47,8 @@ def main():
         return
 
     # Inform the user about data type options and get user-defined types
-    data_types = get_data_types(input_folder)
+    get_data_types_and_clean()
+    # print(confirmed_data_types)
 
     # Ensure output folder exists
     if not os.path.exists(output_folder):
@@ -59,27 +70,25 @@ def main():
         choice = input("Enter your choice: ")
 
         if choice == "1":
-            check_individual_and_combo_duplicates(
-                input_folder, output_folder, data_types
-            )
+            check_individual_and_combo_duplicates()
         elif choice == "2":
-            count_empty_values(input_folder, output_folder, data_types)
+            count_empty_values()
         elif choice == "3":
-            add_or_update_column(input_folder, output_folder, data_types)
+            add_or_update_column()
         elif choice == "4":
-            strip_or_remove_spaces_from_columns(input_folder, output_folder, data_types)
+            strip_or_remove_spaces_from_columns()
         elif choice == "5":
-            split_and_order_csvs(input_folder, output_folder, data_types)
+            split_and_order_csvs()
         elif choice == "6":
-            process_mandatory_fields(input_folder, output_folder, data_types)
+            process_mandatory_fields()
         elif choice == "7":
-            replace_substring_in_column(input_folder, output_folder, data_types)
+            replace_substring_in_column()
         elif choice == "8":
-            count_value_occurrences(input_folder, output_folder, data_types)
+            count_value_occurrences()
         elif choice == "9":
-            format_numbers_or_dates_in_column(input_folder, output_folder, data_types)
+            format_numbers_or_dates_in_column()
         elif choice == "10":
-            rename_column_header(input_folder, output_folder, data_types)
+            rename_column_header()
         elif choice == "0":
             print("Exiting the program.")
             break
@@ -87,10 +96,10 @@ def main():
             print("Invalid choice. Please try again.")
 
 
-def rename_column_header(input_folder, output_folder, data_types):
+def rename_column_header():
     column_prompt = "Enter the column number/name to rename: "
     current_column_header, _ = get_column_names(
-        input_folder, None, column_prompt, return_single_col=True
+        None, column_prompt, return_single_col=True
     )
 
     if current_column_header is None:
@@ -120,10 +129,9 @@ def rename_column_header(input_folder, output_folder, data_types):
 
 
 # This script section applies the format_number function to a specific column in all CSV files in a folder
-def format_numbers_or_dates_in_column(input_folder, output_folder, data_types):
+def format_numbers_or_dates_in_column():
     column_prompt = "Enter the column number/name to format numbers or dates: "
     column_name, existing_columns = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -143,7 +151,9 @@ def format_numbers_or_dates_in_column(input_folder, output_folder, data_types):
             output_file_path = os.path.join(output_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 file_formatted_count = 0  # Counter for the current file
 
                 if column_name in df.columns:
@@ -224,11 +234,9 @@ def format_number(value):
         return value, False  # No change made
 
 
-def split_and_order_csvs(input_folder, output_folder, data_types):
-    global sender_name, timestamp
+def split_and_order_csvs():
     column_prompt = "Enter the column number/name to order by: "
     order_column, existing_columns = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -243,7 +251,9 @@ def split_and_order_csvs(input_folder, output_folder, data_types):
         if filename.endswith(".csv"):
             file_path = os.path.join(input_folder, filename)
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 all_data = pd.concat([all_data, df], ignore_index=True)
             except Exception as e:
                 print(f"Error reading file {filename}: {e}")
@@ -270,13 +280,10 @@ def split_and_order_csvs(input_folder, output_folder, data_types):
     print("Splitting and ordering process completed.")
 
 
-def count_value_occurrences(input_folder, output_folder, data_types):
-    global timestamp, sender_name
-
+def count_value_occurrences():
     # Allow selection of multiple columns
     column_prompt = "Enter column names/numbers to count value/substring occurrences (separated by commas): "
     column_names, _ = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -302,7 +309,9 @@ def count_value_occurrences(input_folder, output_folder, data_types):
         if filename.endswith(".csv"):
             file_path = os.path.join(input_folder, filename)
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 for col in column_names:
                     if col in df.columns:
                         mask = (
@@ -345,10 +354,9 @@ def count_value_occurrences(input_folder, output_folder, data_types):
         print(f"No rows found with '{value_to_search}' in the selected columns.")
 
 
-def replace_substring_in_column(input_folder, output_folder, data_types):
+def replace_substring_in_column():
     column_prompt = "Enter the column number/name in which to replace the substring: "
     column_name, existing_columns = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -367,7 +375,9 @@ def replace_substring_in_column(input_folder, output_folder, data_types):
             output_file_path = os.path.join(output_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
 
                 if column_name in df.columns:
                     df[column_name] = (
@@ -385,7 +395,7 @@ def replace_substring_in_column(input_folder, output_folder, data_types):
     print("Substring replacement completed.")
 
 
-def process_mandatory_fields(input_folder, output_folder, data_types):
+def process_mandatory_fields():
 
     def save_issue_summaries(
         issue_dfs, issue_counts, sender_name, timestamp, output_folder
@@ -429,7 +439,6 @@ def process_mandatory_fields(input_folder, output_folder, data_types):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     column_prompt = "Enter mandatory column names/numbers (separated by commas): "
     mandatory_columns, existing_columns = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -450,7 +459,9 @@ def process_mandatory_fields(input_folder, output_folder, data_types):
             pbar.set_description(f"Processing {filename}")
             file_path = os.path.join(input_folder, filename)
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
 
                 file_issue_counts = {
                     col: 0 for col in mandatory_columns
@@ -525,11 +536,10 @@ def process_mandatory_fields(input_folder, output_folder, data_types):
         print(f"Total issues detected in column '{col}': {count}.")
 
 
-def strip_or_remove_spaces_from_columns(input_folder, output_folder, data_types):
+def strip_or_remove_spaces_from_columns():
     column_prompt = "Enter column names/numbers to modify (separated by commas), or press enter to process all columns: "
 
     column_names, _ = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -552,7 +562,9 @@ def strip_or_remove_spaces_from_columns(input_folder, output_folder, data_types)
             output_file_path = os.path.join(output_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
 
                 for col in column_names:
                     if col in df.columns and df[col].dtype == "object":
@@ -682,12 +694,9 @@ def parse_operation(operation, df):
 
 # Type Conversion: Automatically convert non-string data to strings before concatenation, or handle different data types explicitly.
 # Robust Error Handling: Add more checks and error messages to handle cases like invalid indices, non-existent columns, or unsupported operations.
-
-
-def add_or_update_column(input_folder, output_folder, data_types):
+def add_or_update_column():
     column_prompt = "Enter the column number to update, '-1' to add a new column, or column name directly: "
     column_name, _ = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=True,
@@ -757,7 +766,9 @@ def add_or_update_column(input_folder, output_folder, data_types):
             output_file_path = os.path.join(output_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(input_file_path, data_types)
+                df = pd.read_csv(
+                    input_file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 operation_result, error_message = parse_operation(operation, df)
                 if error_message:
                     print(error_message)
@@ -783,10 +794,9 @@ def add_or_update_column(input_folder, output_folder, data_types):
     print(f"Operation completed. Updated files are saved in {output_folder}")
 
 
-def parse_user_input_for_columns_and_groups(input_folder):
+def parse_user_input_for_columns_and_groups():
     column_prompt = "Enter columns and groups to check for duplicates (e.g., '1,5,doc_date,[1,3,doc_date]'): "
     column_names, _ = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -799,7 +809,6 @@ def parse_user_input_for_columns_and_groups(input_folder):
             # It's a group of columns; parse it into a tuple
             group = col.strip("[]").split(",")
             group_column_names, _ = get_column_names(
-                input_folder,
                 ",".join(group),
                 "",
                 allow_new_columns=False,
@@ -814,11 +823,10 @@ def parse_user_input_for_columns_and_groups(input_folder):
     return parsed_columns
 
 
-def check_individual_and_combo_duplicates(input_folder, output_folder, data_types):
-    global sender_name, timestamp
+def check_individual_and_combo_duplicates():
 
     # Get column names or groups to check for duplicates
-    column_names = parse_user_input_for_columns_and_groups(input_folder)
+    column_names = parse_user_input_for_columns_and_groups()
 
     if not column_names:
         print("No columns or groups to check. Exiting.")
@@ -834,7 +842,9 @@ def check_individual_and_combo_duplicates(input_folder, output_folder, data_type
             file_path = os.path.join(input_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 df["_original_filename"] = filename
                 combined_df = pd.concat([combined_df, df], ignore_index=True)
                 file_frames[filename] = df
@@ -898,13 +908,11 @@ def check_individual_and_combo_duplicates(input_folder, output_folder, data_type
     print("\nDuplicate checking process completed.")
 
 
-def count_empty_values(input_folder, output_folder, data_types):
-    global sender_name, timestamp
+def count_empty_values():
     placeholders = ["", " ", "nan", "-", "_", ".", "na", "null"]
 
     column_prompt = "Enter column names/numbers to count empty values (separated by commas), or press enter to check all columns: "
     column_names, existing_columns = get_column_names(
-        input_folder,
         None,
         column_prompt,
         allow_new_columns=False,
@@ -923,7 +931,9 @@ def count_empty_values(input_folder, output_folder, data_types):
             file_path = os.path.join(input_folder, filename)
 
             try:
-                df = read_csv_with_dtypes(file_path, data_types)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
 
                 for col in column_names:
                     if col in df.columns:
@@ -972,7 +982,6 @@ def count_empty_values(input_folder, output_folder, data_types):
 
 
 def get_column_names(
-    input_folder,
     input_cols,
     user_prompt,
     allow_new_columns=False,
@@ -1053,11 +1062,10 @@ def get_column_names(
         return column_names if valid_input else None, existing_columns
 
 
-""" Sanitize a string to be used as a valid filename. Removes or replaces characters that are not
-allowed in filenames, trims whitespace, and avoids names that could be problematic for a file system. """
-
-
 def sanitize_filename(name):
+    """Sanitize a string to be used as a valid filename. Removes or replaces characters that are not
+    allowed in filenames, trims whitespace, and avoids names that could be problematic for a file system.
+    """
     # Remove leading and trailing whitespace
     name = name.strip()
 
@@ -1113,124 +1121,842 @@ def sanitize_filename(name):
     return name
 
 
-def read_csv_with_dtypes(file_path, data_types):
-    try:
-        converters = {
-            col: preprocess_float
-            for col, dtype in data_types.items()
-            if dtype == "float64" or dtype == "int64"
-        }
-        data_types = {
-            col: dtype
-            for col, dtype in data_types.items()
-            if dtype != "float64" and dtype != "int64"
-        }
-        df = pd.read_csv(file_path, dtype=data_types, converters=converters)
-        # Print final data types
-        # print("Final Data Types after processing:")
-        # print(df.dtypes)
-        return df
-    except Exception as e:
-        print(f"Error reading file {file_path}: {e}")
-        return pd.DataFrame()
+def confirm_or_edit_data_types(
+    accumulated_probabilities,
+    column_order,
+    empty_values_count,
+    total_counts_accumulator,
+):
+    """
+    Allow the user to confirm or edit the inferred data types with explanations and a help option.
 
-
-def get_data_types(input_folder):
-    # Function to map dtype to short code
-    def dtype_to_code(dtype):
-        mapping = {
-            "object": "s",
-            "int64": "i",
-            "float64": "f",
-            "bool": "b",
-            # Add other mappings if needed
-        }
-        return mapping.get(str(dtype), "s")
-
-    # Attempt to load the first CSV file in the directory and display inferred data types
-    for filename in os.listdir(input_folder):
-        if filename.endswith(".csv"):
-            file_path = os.path.join(input_folder, filename)
-            try:
-                df = pd.read_csv(file_path, nrows=5)  # Read first few rows
-                # Adjust data types for columns with all empty values
-                for col in df.columns:
-                    if df[col].isnull().all():
-                        df[col] = df[col].astype(str)
-                print("\nPython's inferred data types for the first CSV file:")
-                for col in df.columns:
-                    print(f"  {col}: {dtype_to_code(df[col].dtype)}")
-                break
-            except Exception as e:
-                print(f"Error reading file {filename}: {e}")
-                return {}
-
-    # Warnings about data type implications
-    print("\nWarning about Data Type Choices:")
-    print("  - Choosing 'bool' will camel case 'True'/'False' values.")
-    print("  - Choosing 'float' will remove spaces and add decimals, even for .0.")
-    print(
-        "  - It's usually best to use 'string' unless you specifically need number or boolean formatting."
-    )
-
-    # Ask user whether to set all columns to strings
-    choice = (
-        input(
-            "\nSet all columns to strings instead of inferred types? (yes [Y]/no [N]): "
-        )
-        .strip()
-        .lower()
-    )
-    default_to_str = choice == "y"
-
-    # Reload DataFrame with chosen data types
-    df = pd.read_csv(file_path, nrows=5, dtype=str if default_to_str else None)
-
-    # Ask if the user wants to manually edit data types
-    edit_choice = (
-        input(
-            "Do you want to manually edit any of the column data types? (yes [Y]/no [N]): "
-        )
-        .strip()
-        .lower()
-    )
-    if edit_choice != "y":
-        return {col: "str" if default_to_str else df[col].dtype for col in df.columns}
-
-    # Prompt user for data types
-    print("\nSpecify data types for each column (current type shown in brackets):")
-    print("  s: string, i: integer, f: float, b: boolean")
-    print("Hit enter to confirm or enter a new type.")
-
-    data_type_options = {
-        "s": "str",
-        "i": "int64",
-        "f": "float64",
-        "b": "bool",
-        # Add other options if needed
+    Parameters:
+    - accumulated_probabilities: Dict with column names as keys and dict of data type probabilities as values.
+    - column_order: List of column names in the order they appear in the input files.
+    """
+    confirmed_data_types = {}
+    dtype_map = {
+        "d": "date",
+        "f": "float",
+        "i": "integer",
+        "b": "boolean",
+        "s": "string",
     }
 
-    data_types = {}
-    for col in df.columns:
-        current_type = dtype_to_code(df[col].dtype)
-        user_input = (
-            input(f"{col} [{current_type if not default_to_str else 's'}]: ")
-            .strip()
-            .lower()
+    print("\nYou can now confirm or edit the inferred data types for each column.")
+    print(
+        "Enter 'd' for date, 'f' for float, 'i' for integer, 'b' for boolean, 's' for string."
+    )
+    print(
+        "Press Enter to accept the current type, or type 'help' for more information on data types.\n"
+    )
+
+    for col in column_order:
+        total_analyzed = total_counts_accumulator.get(col, 0)
+        empty_count = empty_values_count.get(col, 0)
+
+        # Construct the string representation of data types
+        dtype_probs = accumulated_probabilities.get(col, {})
+        dtype_str = (
+            "STRING (defaulted due to empty column)"
+            if total_analyzed == 0
+            else ", ".join(
+                f"{dtype.upper()} with {prob*100:.2f}% certainty"
+                for dtype, prob in dtype_probs.items()
+                if prob > 0
+            )
         )
-        data_types[col] = data_type_options.get(
-            user_input, "str" if default_to_str else df[col].dtype
+
+        while True:  # Keep asking until a valid response is given
+            response = (
+                input(f'Column "{col}" inferred as {dtype_str} -> ').strip().lower()
+            )
+
+            if response == "help":
+                print("\nHelp on choosing the correct data type:")
+                print("- 'd' (Date): Recognizes and allows operations on dates.")
+                print(
+                    "- 'f' (Float): Converts integers to floats, adding decimal points where appropriate."
+                )
+                print(
+                    "- 'i' (Integer): Keeps numbers as integers, suitable for countable quantities."
+                )
+                print(
+                    "- 'b' (Boolean): Recognizes 'True' and 'False' values. Choosing this will case-normalize the values to either 'True' or 'False'."
+                )
+                print(
+                    "- 's' (String): Treats the column as plain text. Choosing this prevents numerical or date operations on the column values.\n"
+                )
+                continue
+
+            if response in dtype_map:
+                confirmed_data_types[col] = dtype_map[response]
+                action = "changed to" if total_analyzed > 0 else "defaulted to"
+                print(f"{col}: Data type {action} {dtype_map[response].upper()}.\n")
+                break
+
+            if response == "":
+                # Accept the most probable inferred data type if no input is provided or default to string for completely empty columns
+                if all(prob == 0 for prob in dtype_probs.values()):
+                    most_probable_dtype = "string"
+                elif dtype_probs:
+                    # Determine the most probable data type based on the highest probability
+                    most_probable_dtype = max(dtype_probs.items(), key=lambda x: x[1])[
+                        0
+                    ]
+                else:
+                    # Default to "string" if there are no calculated probabilities
+                    most_probable_dtype = "string"
+
+                confirmed_data_types[col] = most_probable_dtype
+                action = (
+                    "defaulted to"
+                    if most_probable_dtype == "string"
+                    and total_analyzed == 0
+                    and empty_count > 0
+                    else "accepted as"
+                )
+                print(
+                    f"{col}: Data type {action} {confirmed_data_types[col].upper()}.\n"
+                )
+                break
+
+            print(
+                "Invalid response. Please enter a valid data type code or press Enter to accept the inferred type.\n"
+            )
+
+    return confirmed_data_types
+
+
+def infer_data_types_and_counts(column_data, col_name, in_date_format):
+    """
+    Efficiently analyzes column data to count occurrences of each data type using batch operations,
+    adapted to work with a Series of consolidated unique values for a single column.
+
+    Parameters:
+    - column_data: A pandas Series containing the unique data of a single column.
+    - col_name: The name of the column being analyzed. (Currently unused but kept for potential future use)
+    - in_date_format: The date format to use for parsing dates.
+
+    Returns:
+    - A dictionary with data types as keys and their counts as values.
+    """
+    data_type_counts = defaultdict(int)
+    if in_date_format:
+        date_converted = pd.to_datetime(
+            column_data, format=in_date_format, errors="coerce"
+        )
+        data_type_counts["date"] = date_converted.notna().sum()
+
+    booleans_detected = column_data.str.lower().isin(
+        ["true", "false", "t", "f", "1", "0"]
+    )
+    data_type_counts["boolean"] = booleans_detected.sum()
+
+    numeric_candidates = column_data[~booleans_detected]
+    if not numeric_candidates.empty:
+        numeric_converted = pd.to_numeric(numeric_candidates, errors="coerce")
+        floats_detected = numeric_converted.notna() & (numeric_converted % 1 != 0)
+        data_type_counts["float"] = floats_detected.sum()
+        data_type_counts["integer"] = (
+            numeric_converted.notna().sum() - floats_detected.sum()
+        )
+    else:
+        data_type_counts["float"] = 0
+        data_type_counts["integer"] = 0
+
+    # Determine if any types have been identified, adjust string count accordingly
+    identified_counts = sum(data_type_counts.values())
+    total_values = len(column_data)
+    data_type_counts["string"] = (
+        total_values - identified_counts if identified_counts < total_values else 0
+    )
+
+    # Ensure default to string if no other data types identified
+    if not any(data_type_counts.values()):
+        data_type_counts["string"] = total_values
+
+    return dict(data_type_counts)
+
+
+def consolidate_and_analyze_columns(files):
+    """
+    Consolidates unique values for each column across all provided CSV files, processes each
+    consolidated column in parallel to determine data type distributions, and calculates
+    probabilities for each data type in each column.
+
+    Parameters:
+    - files: List of file paths to the CSV files.
+
+    Returns:
+    - A dictionary with column names as keys, each mapping to another dictionary where keys
+      are data types and values are the probabilities of each data type for the column.
+    - A dictionary with the total counts of values analyzed for each column.
+    """
+    # Consolidate unique values for each column across all files into pandas Series
+    consolidated_columns = defaultdict(list)
+    empty_counts = defaultdict(int)
+    for file_path in tqdm(files, desc="Reading Files"):
+        df = pd.read_csv(file_path, dtype=str, low_memory=False)
+        for col in df.columns:
+            empty_counts[col] += df[col].isna().sum()
+            consolidated_columns[col].extend(df[col].dropna().unique())
+
+    for col, values in consolidated_columns.items():
+        consolidated_columns[col] = (
+            pd.Series(values).drop_duplicates().reset_index(drop=True)
         )
 
-    return data_types
+    # Process each consolidated column in parallel to determine data type distributions
+    column_data_types = {}
+    with ProcessPoolExecutor() as executor:
+        futures = {
+            executor.submit(infer_data_types_and_counts, data, col, in_date_format): col
+            for col, data in consolidated_columns.items()
+        }
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Analyzing columns"
+        ):
+            col = futures[future]
+            column_data_types[col] = future.result()
+
+    # Accumulate data type counts and calculate probabilities
+    total_counts_accumulator = {
+        col: sum(counts.values()) for col, counts in column_data_types.items()
+    }
+    probabilities = {
+        col: {
+            dtype: (
+                (count / total_counts_accumulator[col])
+                if total_counts_accumulator[col] > 0
+                else 0
+            )
+            for dtype, count in counts.items()
+        }
+        for col, counts in column_data_types.items()
+    }
+
+    return probabilities, total_counts_accumulator, empty_counts
 
 
-def preprocess_float(value):
-    """Remove spaces and convert to float."""
-    try:
-        return float(str(value).replace(" ", ""))
-    except ValueError:
-        return None  # or return pd.NA if you want to use pandas' NA type
+def get_data_types_and_clean():
+    """
+    Orchestrates the entire process including user interaction for data type decisions and data sanitization,
+    now using consolidated column values for data type probability processing.
+    """
+    # Set global formats based on user input
+    global confirmed_data_types
+    confirmed_data_types["conversion_issues"] = "string"
+    get_user_numeric_format_choice()
+    get_user_date_format_choices()
+
+    # Gather all CSV file paths in the input folder
+    files = [
+        os.path.join(input_folder, f)
+        for f in os.listdir(input_folder)
+        if f.endswith(".csv")
+    ]
+
+    # Use the consolidated function for accumulating data type counts and calculating probabilities
+    accumulated_probabilities, total_counts_accumulator, empty_values_count = (
+        consolidate_and_analyze_columns(files)
+    )
+
+    # Extract column order from the first file
+    first_file_path = files[0]
+    df = pd.read_csv(first_file_path, dtype=str, nrows=0)
+    column_order = df.columns.tolist()
+
+    # Display the calculated probabilities to the user for confirmation
+    display_data_type_probabilities(
+        accumulated_probabilities,
+        total_counts_accumulator,
+        empty_values_count,
+        column_order,
+    )
+
+    # Interaction for data type edits based on probabilities remains unchanged
+    edit_choice = (
+        input("Do you want to edit any of these data types? (Y/N): ").strip().lower()
+    )
+
+    if edit_choice == "y":
+        confirmed_data_types = confirm_or_edit_data_types(
+            accumulated_probabilities,
+            column_order,
+            empty_values_count,
+            total_counts_accumulator,
+        )
+    else:
+        for col, probs in accumulated_probabilities.items():
+            confirmed_data_types[col] = max(probs, key=probs.get)
+
+    # Ask if the user wants to sanitize and clean the data based on confirmed data types
+    handle_sanitization_choice(files)
+
+
+def display_data_type_probabilities(
+    accumulated_probabilities,
+    total_counts_accumulator,
+    empty_values_count,
+    column_order,
+):
+    """
+    Displays the probabilities of data types for each column, including a count of empty fields,
+    with columns ordered as they appear in the input files.
+
+    Parameters:
+    - accumulated_probabilities: Dict of probabilities for each data type in each column.
+    - total_counts_accumulator: Dict of total counts of values analyzed for each column.
+    - empty_values_count: Dict of empty value counts for each column.
+    - column_order: List of column names in the order they appear in the input files.
+    """
+    # Prepare the headers and the rows for the table
+    headers = [
+        "Column",
+        "Total Analyzed",
+        "Empty Fields",
+        "Date",
+        "Boolean",
+        "Float",
+        "Integer",
+        "String",
+    ]
+    rows = []
+
+    for col in column_order:
+        if col in accumulated_probabilities:  # Check if the column is in the results
+            probs = accumulated_probabilities[col]
+            total_analyzed = total_counts_accumulator[col]
+            empty_count = empty_values_count[col]
+            row = [
+                col.center(len(col)),
+                str(total_analyzed).center(len("Total Analyzed")),
+                str(empty_count).center(len("Empty Fields")),
+            ]
+
+            for dtype in ["date", "boolean", "float", "integer", "string"]:
+                prob = probs.get(dtype, 0) * 100  # Convert to percentage
+                cell_value = f"{prob:.2f}%" if prob > 0 else "-"
+                if (
+                    dtype == "string" and empty_count > 0 and total_analyzed == 0
+                ):  # Check if column is completely empty
+                    cell_value = " default"
+                row.append(cell_value.center(len(dtype)))
+
+            rows.append(row)
+
+    # Print the table
+    print(tabulate(rows, headers=headers, tablefmt="grid"))
+
+
+def handle_sanitization_choice(files):
+    """
+    Handles user choice for sanitizing data, updating the script to process based on confirmed data types.
+    """
+    global confirmed_data_types  # Ensure we're modifying the global variable
+    print(
+        "\nDo you want to sanitize the data based on the confirmed data types? This can alter your dataset by removing rows that do not match the specified data types. (Y/N/Help):"
+    )
+    choice = input().strip().lower()
+    if choice == "help":
+        # Explain the sanitization process and implications
+        print(
+            "Sanitization will check each row in your CSV files against the confirmed data types. Rows with data that does not match these types will be excluded from the processed dataset. This step can help ensure data quality but may also lead to data loss if many rows do not conform to the expected types."
+        )
+        choice = (
+            input("Do you want to proceed with sanitization? (Y/N): ").strip().lower()
+        )
+
+    if choice == "y":
+        sanitize_and_save_data(files)
+    elif choice == "n":
+        print(
+            "Skipping data sanitization. All columns will be set to use dtype string to avoid errors."
+        )
+        print(
+            "Note: If you wish to perform operations that require specific data types (numeric, boolean, or dates), you will need to sanitize your data."
+        )
+        # Set all columns to dtype string
+        for col in confirmed_data_types.keys():
+            confirmed_data_types[col] = "string"
+
+
+def sanitize_and_save_data(files):
+    """
+    Sanitizes data for each file based on confirmed data types and saves the cleaned data.
+    """
+
+    def output_summary(summaries):
+        total_files = len(summaries)
+        total_clean_files = 0
+        total_unclean_files = 0
+        total_rows_processed = 0
+        total_dirty_num_rows = 0
+        total_dirty_bool_rows = 0
+        total_dirty_date_rows = 0
+
+        for summary in summaries:
+            # debugging output
+            # print("\n-------------------------------------------------")
+            # print(f"File processed: {summary['file_path']}")
+            # print(f"Clean rows: {summary['clean_rows_count']}")
+            # print(f"Rows with issues: {summary['rows_with_issues_count']}")
+            # print("-------------------------------------------------")
+
+            # Increment counters based on summary info
+            if summary["rows_with_issues_count"] > 0:
+                total_unclean_files += 1
+                total_dirty_num_rows += summary["dirty_num_rows"]
+                total_dirty_bool_rows += summary["dirty_bool_rows"]
+                total_dirty_date_rows += summary["dirty_date_rows"]
+            else:
+                total_clean_files += 1
+
+            total_rows_processed += summary["total_rows"]
+
+        # Calculate overall success rate
+        dirty_rows_total = (
+            total_dirty_num_rows + total_dirty_bool_rows + total_dirty_date_rows
+        )
+        clean_rows_total = total_rows_processed - dirty_rows_total
+        success_rate_files = (
+            (total_clean_files / total_files) * 100 if total_files else 0
+        )
+        success_rate_rows = (
+            (clean_rows_total / total_rows_processed) * 100
+            if total_rows_processed
+            else 0
+        )
+        failure_rate_dirty_rows = (
+            (dirty_rows_total / total_rows_processed) * 100
+            if total_rows_processed
+            else 0
+        )
+
+        # Output overall summary
+        data = [
+            [
+                "Files processed",
+                total_files,
+                "",
+                "Rows processed",
+                total_rows_processed,
+                "",
+                "Dirty num rows",
+                total_dirty_num_rows,
+            ],
+            [
+                "Clean files",
+                total_clean_files,
+                "",
+                "Dirty rows",
+                dirty_rows_total,
+                "",
+                "Dirty date rows",
+                total_dirty_date_rows,
+            ],
+            [
+                "Dirty files",
+                total_unclean_files,
+                "",
+                "Clean rows",
+                clean_rows_total,
+                "",
+                "Dirty bool rows",
+                total_dirty_bool_rows,
+            ],
+            # Success rates row
+            [
+                "Success rate (files)",
+                f"{success_rate_files:.2f}%",
+                "",
+                "Success rate (rows)",
+                f"{success_rate_rows:.2f}%",
+                "",
+                "Failure rate (rows)",
+                f"{failure_rate_dirty_rows:.2f}%",
+            ],
+        ]
+
+        headers = [
+            "Metric (Files)",
+            "Value",
+            " ",
+            "Metric (Rows)",
+            "Value",
+            " ",
+            "Specific Issues",
+            "Value",
+        ]
+        print("\nSummary of sanitization process:")
+        print(tabulate(data, headers=headers, tablefmt="grid"))
+
+    summaries = []
+    with ProcessPoolExecutor() as executor:
+        # Create a list to hold the futures
+        futures = []
+        for file in files:
+            future = executor.submit(
+                process_and_sanitize_data,
+                file,
+                output_folder,
+                confirmed_data_types,
+                in_date_format,
+                out_date_format,
+                numeric_format,
+                boolean_format,
+            )
+            futures.append(future)
+
+        # Use tqdm to display progress
+        for future in tqdm(
+            as_completed(futures), total=len(files), desc="Processing Files"
+        ):
+            # Results can be processed here if needed
+            try:
+                # Getting the result also checks for any exceptions raised during execution
+                summary_info = future.result()
+                summaries.append(summary_info)
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+    # Output summary after all files are processed
+    output_summary(summaries)
+
+
+def process_and_sanitize_data(
+    file_path,
+    output_folder,
+    confirmed_data_types,
+    in_date_format,
+    out_date_format,
+    numeric_format,
+    boolean_format,
+):
+    """
+    Process and sanitize a single CSV file based on specified data types and formats,
+    tracking conversion issues in a dedicated column. Returns a summary of the process.
+
+    Parameters:
+    - file_path: Path to the input CSV file.
+    - output_folder: Path where the sanitized file and any issues file should be saved.
+    - confirmed_data_types: Dict specifying the data type for each column.
+    - in_date_format: Date format for parsing dates.
+    - out_date_format: Date format for outputting dates.
+    - numeric_format: Dict specifying numeric format for parsing numbers.
+    - boolean_format: Bool format for outputting booleans.
+    """
+    # print(f"Starting processing and sanitization of {file_path}.")
+    df = pd.read_csv(file_path, dtype=str, low_memory=False)
+    # print("Initial CSV read completed.")
+
+    # Initialize a column to track conversion issues at the row level
+    df["conversion_issues"] = np.nan
+
+    summary = {
+        "file_path": file_path,
+        "total_rows": len(df),
+        "rows_with_issues_count": 0,
+        "clean_rows_count": 0,
+        "dirty_num_rows": 0,
+        "dirty_bool_rows": 0,
+        "dirty_date_rows": 0,
+    }
+
+    # Iterate through each column to process based on its data type
+    for col, dtype in confirmed_data_types.items():
+        # print(f"Processing column: {col} with data type: {dtype}")
+
+        # Skip processing if column not found in DataFrame
+        if col not in df.columns:
+            tqdm.write(f"Column {col} not found in the file. Skipping...")
+            continue
+
+        # Initialize a Series for individual column's conversion issues
+        conversion_issues = pd.Series(index=df.index, dtype="object")
+
+        # Process column based on its data type
+        if dtype == "date":
+            df[col], conversion_issues = preprocess_date(
+                df[col], in_date_format, out_date_format, conversion_issues
+            )
+            # Increment dirty_date_rows for each conversion issue in this column
+            summary["dirty_date_rows"] += conversion_issues.notna().sum()
+        elif dtype in ["float", "integer"]:
+            df[col], conversion_issues = preprocess_numeric_series(
+                df[col], numeric_format, conversion_issues
+            )
+            # Increment dirty_num_rows for each conversion issue in this column
+            summary["dirty_num_rows"] += conversion_issues.notna().sum()
+        elif dtype == "boolean":
+            df[col], conversion_issues = preprocess_boolean_series(
+                df[col], boolean_format, conversion_issues
+            )
+            # Increment dirty_bool_rows for each conversion issue in this column
+            summary["dirty_bool_rows"] += conversion_issues.notna().sum()
+
+        # Assuming 'conversion_issues' is filled with non-null values for rows with issues
+        # Update the 'conversion_issues' column in the dataframe
+        if "conversion_issues" in df.columns:
+            df["conversion_issues"] = df["conversion_issues"].combine_first(
+                conversion_issues
+            )
+        else:
+            df["conversion_issues"] = conversion_issues
+
+    # print("Completed processing for all columns.")
+
+    # Identify rows with any conversion issues and drop rows where 'conversion_issues' is NaN before saving issues file
+    rows_with_issues = df[
+        df["conversion_issues"].notna() & (df["conversion_issues"] != "")
+    ]
+
+    # Save the cleaned data, including only rows without identified conversion issues (NaN in 'conversion_issues')
+    clean_rows = df[pd.isna(df["conversion_issues"])].drop(
+        columns=["conversion_issues"]
+    )
+    clean_file_path = os.path.join(
+        output_folder, os.path.basename(file_path).replace(".csv", "_clean.csv")
+    )
+    clean_rows.to_csv(clean_file_path, index=False)
+    # print(f"Clean data saved to {clean_file_path}.")
+
+    summary["rows_with_issues_count"] = len(rows_with_issues)
+    summary["clean_rows_count"] = len(clean_rows)
+
+    # Add a check to ensure the dirty rows counters add up to rows with issues count
+    if summary["rows_with_issues_count"] != (
+        summary["dirty_num_rows"]
+        + summary["dirty_bool_rows"]
+        + summary["dirty_date_rows"]
+    ) or (
+        summary["clean_rows_count"]
+        != summary["total_rows"] - summary["rows_with_issues_count"]
+    ):
+        print(
+            "Error: The sum of dirty rows does not match the total rows with issues count."
+        )
+    else:
+        # print("Counts verified: The sum of dirty rows matches the total rows with issues count.")
+        pass
+
+    # Save rows with conversion issues, if any
+    if not rows_with_issues.empty:
+        issues_file_path = os.path.join(
+            output_folder, os.path.basename(file_path).replace(".csv", "_issues.csv")
+        )
+        # Include only the columns of interest for issues file; you might want to keep 'conversion_issues'
+        rows_with_issues.to_csv(issues_file_path, index=False)
+        # print(f"Rows with issues saved to {issues_file_path}.")
+
+    return summary
+
+
+# add check for custom number format and add multiple formats (spaces as thou seps, no thou seps, etc)
+def get_user_numeric_format_choice():
+    global numeric_format  # Declare the use of the global variable within the function
+
+    print("\nSelect the numeric format for your CSV:")
+    print("1: Dot as decimal separator (e.g., 1,000.00)")
+    print("2: Comma as decimal separator (e.g., 1.000,00)")
+    print("c: Custom format")
+    choice = input("Your choice (1/2/c): ").strip()
+
+    if choice == "1":
+        numeric_format = {"decimal": ".", "thousands": ","}
+    elif choice == "2":
+        numeric_format = {"decimal": ",", "thousands": "."}
+    elif choice == "c":
+        decimal = input("Enter your decimal separator (e.g., '.', ','): ").strip()
+        thousands = input(
+            "Enter your thousands separator (if any, else leave blank): "
+        ).strip()
+        numeric_format = {"decimal": decimal, "thousands": thousands}
+    else:
+        print("Defaulting to dot as decimal separator.")
+        numeric_format = {"decimal": ".", "thousands": ","}
+        # The numeric_format is already initialized with the default values, so no need to update it unless the user chooses a different format.
+
+
+# add check for custom date format
+def get_user_date_format_choices():
+    """Prompts the user for input and output date formats with explanations and a help option."""
+    global in_date_format, out_date_format
+    print(
+        "\nYour CSV files might contain dates. Specifying the correct date format ensures accurate processing."
+    )
+    print("If you're unsure about the date formats, type 'help' for examples.")
+
+    has_dates = input("Do CSV files contain date values? (Y/N/Help): ").strip().lower()
+    if has_dates == "help":
+        # Provide examples and implications of date format selection
+        print(
+            "\nHelp: Choosing 'Y' allows you to specify the date format present in your CSV files."
+        )
+        has_dates = input("Do CSV files contain date values? (Y/N): ").strip().lower()
+
+    if has_dates == "y":
+        date_formats = {
+            "1": "%d/%m/%Y",
+            "2": "%m/%d/%Y",
+            "3": "%Y-%m-%d",
+            "4": "%d-%m-%Y",
+            "5": "%Y/%m/%d",
+        }
+        print("\nSelect the input date format for your CSV:")
+        for key, fmt in date_formats.items():
+            print(f"{key}: {fmt}")
+        print("c: Custom format")
+        choice = input("Your choice: ").strip().lower()
+        in_date_format = (
+            date_formats.get(choice)
+            if choice in date_formats
+            else (
+                input("Enter your custom input date format: ").strip()
+                if choice == "c"
+                else None
+            )
+        )
+
+        print("\nSelect the output date format for your CSV (if different from input):")
+        for key, fmt in date_formats.items():
+            print(f"{key}: {fmt}")
+        print("c: Custom format, s: Same as input")
+        choice = input("Your choice: ").strip().lower()
+        out_date_format = (
+            in_date_format
+            if choice == "s"
+            else (
+                date_formats.get(choice)
+                if choice in date_formats
+                else (
+                    input("Enter your custom output date format: ").strip()
+                    if choice == "c"
+                    else None
+                )
+            )
+        )
+    else:
+        in_date_format = out_date_format = None
+
+
+def preprocess_numeric_series(column, numeric_format, conversion_issues):
+    """
+    Preprocess a numeric series based on the user-selected numeric format,
+    handling negative numbers, removing thousands separators, and dealing with decimal separators.
+    Flags unsuccessful conversions and updates the conversion_issues Series accordingly.
+
+    Parameters:
+    - column: Pandas Series to be processed.
+    - numeric_format: Dict with 'thousands' and 'decimal' separators.
+    - conversion_issues: Pandas Series to flag rows with conversion issues.
+
+    Returns:
+    - The Series with numeric conversions applied.
+    - Updated conversion_issues Series with flags for unsuccessful conversions.
+    """
+    # Replace negative sign with a marker to avoid interference during formatting
+    column = column.str.replace("-", "NEG", regex=False)
+
+    # Remove any spaces
+    column = column.str.replace(" ", "", regex=False)
+
+    # Attempt to clean and convert the series based on the provided numeric format
+    if numeric_format["thousands"]:
+        column = column.str.replace(numeric_format["thousands"], "", regex=False)
+    if numeric_format["decimal"] and numeric_format["decimal"] != ".":
+        column = column.str.replace(numeric_format["decimal"], ".", regex=False)
+
+    # Convert back the 'NEG' marker to '-'
+    column = column.str.replace("NEG", "-", regex=False)
+
+    converted = pd.to_numeric(column, errors="coerce")
+
+    # Flag rows with conversion issues
+    conversion_issues.loc[converted.isna() & column.notna()] = "num"
+
+    # Apply formatting to remove unnecessary decimal points for whole numbers
+    formatted = converted.apply(
+        lambda x: (
+            format(x, ".0f")
+            if pd.notnull(x) and isinstance(x, float) and x.is_integer()
+            else x
+        )
+    )
+
+    # Return converted data where possible; otherwise, keep the original data
+    column = column.where(converted.isna(), formatted.astype(str))
+
+    return column, conversion_issues
+
+
+def preprocess_date(column, in_date_format, out_date_format, conversion_issues):
+    """
+    Convert date strings from a pandas Series to the specified input and output date formats,
+    marking conversion failures with a specific flag.
+
+    Parameters:
+    - column: Series to be processed.
+    - in_date_format: Expected format of the input dates.
+    - out_date_format: Desired format of the output dates.
+    - conversion_issues: Series to flag conversion issues.
+
+    Returns:
+    - The Series with date conversions applied where possible.
+    - Updated conversion_issues Series with flags for unsuccessful conversions.
+    """
+    original_data = column.copy()
+    converted = pd.to_datetime(column, format=in_date_format, errors="coerce")
+
+    # Flag rows with conversion issues
+    conversion_issues.loc[converted.isna() & column.notna()] = "date"
+
+    # Apply the output date format to successfully converted dates
+    if out_date_format:
+        column = converted.dt.strftime(out_date_format).where(
+            ~converted.isna(), original_data
+        )
+
+    return column, conversion_issues
+
+
+# add boolean input check and ask for standardization of all values to a certain format
+def preprocess_boolean_series(column, boolean_format, conversion_issues):
+    """
+    Preprocess a series for boolean values, considering 'true', 'false', 't', 'f', '1', and '0'.
+    Flags inconsistencies and ignores empty fields, updating conversion issues accordingly.
+
+    Parameters:
+    - column: Pandas Series containing potential boolean values.
+    - conversion_issues: Series to flag conversion issues.
+
+    Returns:
+    - The Series with boolean conversions applied where possible.
+    - Updated conversion_issues Series with flags for unsuccessful conversions.
+    """
+    original_data = column.copy()
+    bool_mapping = {
+        "true": True,
+        "t": True,
+        "1": True,
+        "false": False,
+        "f": False,
+        "0": False,
+    }
+    converted = column.str.lower().map(bool_mapping)
+
+    # Identify rows that couldn't be converted (excluding empty values)
+    conversion_issues.loc[converted.isna() & column.notna()] = "bool"
+
+    # For successfully converted rows, replace the original data with converted boolean values
+    column = converted.where(~converted.isna(), original_data)
+
+    return column, conversion_issues
+
+
+def int_dict():
+    return defaultdict(int)
 
 
 if __name__ == "__main__":
