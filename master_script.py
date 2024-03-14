@@ -65,7 +65,8 @@ def main():
         print("7. Replace substring in a column")
         print("8. Count occurences of given value OR all unique values in column")
         print("9. Format dates OR numbers (dot (.) as decimal sep, no thousand sep) ")
-        print("10. Rename a column header")
+        print("10. Rename a column")
+        print("11. Delete a column")
         print("0. Exit")
         choice = input("Enter your choice: ")
 
@@ -89,11 +90,49 @@ def main():
             format_numbers_or_dates_in_column()
         elif choice == "10":
             rename_column_header()
+        elif choice == "11":
+            delete_column_from_all_csv()
         elif choice == "0":
             print("Exiting the program.")
             break
         else:
             print("Invalid choice. Please try again.")
+
+
+def delete_column_from_all_csv():
+    column_prompt = "Enter the column number/name to delete: "
+    column_to_delete, _ = get_column_names(None, column_prompt, return_single_col=True)
+
+    if column_to_delete is None:
+        print("Invalid column selection.")
+        return
+
+    print(f"Column to delete: {column_to_delete}")
+
+    for filename in os.listdir(input_folder):
+        if filename.endswith(".csv"):
+            file_path = os.path.join(input_folder, filename)
+            output_file_path = os.path.join(output_folder, filename)
+
+            try:
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
+
+                # Check if the column to delete exists in the DataFrame
+                if column_to_delete in df.columns:
+                    df = df.drop(columns=[column_to_delete])
+                    df.to_csv(output_file_path, index=False)
+                    print(f"Deleted column '{column_to_delete}' in file: {filename}")
+                else:
+                    print(
+                        f"Column '{column_to_delete}' not found in file: {filename}. Skipping."
+                    )
+
+            except Exception as e:
+                print(f"Error processing file {filename}: {e}")
+
+    print(f"Column deletion completed. Updated files are saved in {output_folder}.")
 
 
 def rename_column_header():
@@ -116,7 +155,9 @@ def rename_column_header():
             output_file_path = os.path.join(output_folder, sanitized_filename)
 
             try:
-                df = pd.read_csv(file_path)
+                df = pd.read_csv(
+                    file_path, dtype=confirmed_data_types, low_memory=False
+                )
                 df = df.rename(columns={current_column_header: new_column_header})
                 df.to_csv(output_file_path, index=False)
                 print(f"Renamed column header in file: {sanitized_filename}")
